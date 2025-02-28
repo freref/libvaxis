@@ -81,6 +81,18 @@ pub const Command = union(enum) {
     /// Try to copy the provided text to the host clipboard. Uses OSC 52. Silently fails if terminal
     /// doesn't support OSC 52
     copy_to_clipboard: []const u8,
+
+    /// Set the title of the terminal
+    set_title: []const u8,
+
+    /// Queue a refresh of the entire screen. Implicitly sets redraw
+    queue_refresh,
+
+    /// Send a system notification
+    notify: struct {
+        title: ?[]const u8,
+        body: []const u8,
+    },
 };
 
 pub const EventContext = struct {
@@ -128,6 +140,35 @@ pub const EventContext = struct {
 
     pub fn copyToClipboard(self: *EventContext, content: []const u8) Allocator.Error!void {
         try self.addCmd(.{ .copy_to_clipboard = content });
+    }
+
+    pub fn setTitle(self: *EventContext, title: []const u8) Allocator.Error!void {
+        try self.addCmd(.{ .set_title = title });
+    }
+
+    pub fn queueRefresh(self: *EventContext) Allocator.Error!void {
+        try self.addCmd(.queue_refresh);
+        self.redraw = true;
+    }
+
+    /// Send a system notification. This function dupes title and body using it's own allocator.
+    /// They will be freed once the notification has been sent
+    pub fn sendNotification(
+        self: *EventContext,
+        maybe_title: ?[]const u8,
+        body: []const u8,
+    ) Allocator.Error!void {
+        const alloc = self.cmds.allocator;
+        if (maybe_title) |title| {
+            return self.addCmd(.{ .notify = .{
+                .title = try alloc.dupe(u8, title),
+                .body = try alloc.dupe(u8, body),
+            } });
+        }
+        return self.addCmd(.{ .notify = .{
+            .title = null,
+            .body = try alloc.dupe(u8, body),
+        } });
     }
 };
 
@@ -207,6 +248,13 @@ pub const MaxSize = struct {
             .height = self.height.?,
         };
     }
+
+    pub fn fromSize(other: Size) MaxSize {
+        return .{
+            .width = other.width,
+            .height = other.height,
+        };
+    }
 };
 
 /// The Widget interface
@@ -281,9 +329,6 @@ pub const Surface = struct {
     /// The widget this surface belongs to
     widget: Widget,
 
-    /// If this widget / Surface is focusable
-    focusable: bool = false,
-
     /// Cursor state
     cursor: ?CursorState = null,
 
@@ -345,7 +390,6 @@ pub const Surface = struct {
             .widget = self.widget,
             .buffer = self.buffer[0 .. self.size.width * height],
             .children = self.children,
-            .focusable = self.focusable,
         };
     }
 

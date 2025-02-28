@@ -104,7 +104,11 @@ pub fn handleEvent(self: *TextField, ctx: *vxfw.EventContext, event: vxfw.Event)
                 return self.checkChanged(ctx);
             } else if (key.matches(vaxis.Key.enter, .{}) or key.matches('j', .{ .ctrl = true })) {
                 if (self.onSubmit) |onSubmit| {
-                    try onSubmit(self.userdata, ctx, self.previous_val);
+                    const value = try self.toOwnedSlice();
+                    // Get a ref to the allocator in case onSubmit deinits the TextField
+                    const allocator = self.buf.allocator;
+                    defer allocator.free(value);
+                    try onSubmit(self.userdata, ctx, value);
                     return ctx.consumeAndRedraw();
                 }
             } else if (key.text) |text| {
@@ -206,7 +210,6 @@ pub fn draw(self: *TextField, ctx: vxfw.DrawContext) Allocator.Error!vxfw.Surfac
         self.widget(),
         .{ .width = max_width, .height = @max(ctx.min.height, 1) },
     );
-    surface.focusable = true;
 
     const base: vaxis.Cell = .{ .style = .{} };
     @memset(surface.buffer, base);

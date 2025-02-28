@@ -292,7 +292,6 @@ fn drawBuilder(self: *ListView, ctx: vxfw.DrawContext, builder: Builder) Allocat
 
     // Set state
     {
-        surface.focusable = true;
         // Assume we have more. We only know we don't after drawing
         self.scroll.has_more = true;
     }
@@ -350,14 +349,12 @@ fn drawBuilder(self: *ListView, ctx: vxfw.DrawContext, builder: Builder) Allocat
 
         // Set up constraints. We let the child be the entire height if it wants
         const child_ctx = ctx.withConstraints(
-            .{ .width = max_size.width - child_offset, .height = 0 },
-            .{ .width = max_size.width - child_offset, .height = null },
+            .{ .width = max_size.width -| child_offset, .height = 0 },
+            .{ .width = max_size.width -| child_offset, .height = null },
         );
 
         // Draw the child
-        var surf = try child.draw(child_ctx);
-        // We set the child to non-focusable so that we can manage where the keyevents go
-        surf.focusable = false;
+        const surf = try child.draw(child_ctx);
 
         // Add the child surface to our list. It's offset from parent is the accumulated height
         try child_list.append(.{
@@ -401,10 +398,11 @@ fn drawBuilder(self: *ListView, ctx: vxfw.DrawContext, builder: Builder) Allocat
             .surface = child.surface,
             .z_index = 0,
         };
+        const size = child.surface.size;
         const cursor_surf = try vxfw.Surface.initWithChildren(
             ctx.arena,
             self.widget(),
-            .{ .width = child_offset, .height = child.surface.size.height },
+            .{ .width = child_offset + size.width, .height = size.height },
             sub,
         );
         for (0..cursor_surf.size.height) |row| {

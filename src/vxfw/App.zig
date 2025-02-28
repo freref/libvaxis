@@ -60,6 +60,7 @@ pub fn run(self: *App, widget: vxfw.Widget, opts: Options) anyerror!void {
 
     try vx.enterAltScreen(tty.anyWriter());
     try vx.queryTerminal(tty.anyWriter(), 1 * std.time.ns_per_s);
+    try vx.setBracketedPaste(tty.anyWriter(), true);
 
     {
         // This part deserves a comment. loop.init installs a signal handler for the tty. We wait to
@@ -83,12 +84,9 @@ pub fn run(self: *App, widget: vxfw.Widget, opts: Options) anyerror!void {
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     defer arena.deinit();
 
-    var buffered = tty.bufferedWriter();
-
     var mouse_handler = MouseHandler.init(widget);
     defer mouse_handler.deinit(self.allocator);
     var focus_handler = FocusHandler.init(self.allocator, widget);
-    focus_handler.intrusiveInit();
     try focus_handler.path_to_focused.append(widget);
     defer focus_handler.deinit();
 
@@ -132,8 +130,7 @@ pub fn run(self: *App, widget: vxfw.Widget, opts: Options) anyerror!void {
                 .focus_out => try mouse_handler.mouseExit(self, &ctx),
                 .mouse => |mouse| try mouse_handler.handleMouse(self, &ctx, mouse),
                 .winsize => |ws| {
-                    try vx.resize(self.allocator, buffered.writer().any(), ws);
-                    try buffered.flush();
+                    try vx.resize(self.allocator, tty.anyWriter(), ws);
                     ctx.redraw = true;
                 },
                 else => {
@@ -143,9 +140,11 @@ pub fn run(self: *App, widget: vxfw.Widget, opts: Options) anyerror!void {
             }
         }
 
+        // If we have a focus change, handle that event before we layout
         if (self.wants_focus) |wants_focus| {
             try focus_handler.focusWidget(&ctx, wants_focus);
             try self.handleCommand(&ctx.cmds);
+            self.wants_focus = null;
         }
 
         // Check if we should quit
@@ -154,42 +153,82 @@ pub fn run(self: *App, widget: vxfw.Widget, opts: Options) anyerror!void {
         // Check if we need a redraw
         if (!ctx.redraw) continue;
         ctx.redraw = false;
+        // Clear the arena.
+        _ = arena.reset(.free_all);
         // Assert that we have handled all commands
         assert(ctx.cmds.items.len == 0);
 
-        _ = arena.reset(.retain_capacity);
+        const surface: vxfw.Surface = blk: {
+            // Draw the root widget
+            const surface = try self.doLayout(widget, &arena);
 
-        const draw_context: vxfw.DrawContext = .{
-            .arena = arena.allocator(),
-            .min = .{ .width = 0, .height = 0 },
-            .max = .{
-                .width = @intCast(vx.screen.width),
-                .height = @intCast(vx.screen.height),
-            },
-            .cell_size = .{
-                .width = vx.screen.width_pix / vx.screen.width,
-                .height = vx.screen.height_pix / vx.screen.height,
-            },
+            // Check if any hover or mouse effects changed
+            try mouse_handler.updateMouse(self, surface, &ctx);
+            // Our focus may have changed. Handle that here
+            if (self.wants_focus) |wants_focus| {
+                try focus_handler.focusWidget(&ctx, wants_focus);
+                try self.handleCommand(&ctx.cmds);
+                self.wants_focus = null;
+            }
+
+            assert(ctx.cmds.items.len == 0);
+            if (!ctx.redraw) break :blk surface;
+            // If updating the mouse required a redraw, we do the layout again
+            break :blk try self.doLayout(widget, &arena);
         };
-        const win = vx.window();
-        win.clear();
-        win.hideCursor();
-        win.setCursorShape(.default);
-        const surface = try widget.draw(draw_context);
-
-        const root_win = win.child(.{
-            .width = surface.size.width,
-            .height = surface.size.height,
-        });
-        surface.render(root_win, focus_handler.focused_widget);
-        try vx.render(buffered.writer().any());
-        try buffered.flush();
 
         // Store the last frame
         mouse_handler.last_frame = surface;
+        // Update the focus handler list
         try focus_handler.update(surface);
-        self.wants_focus = null;
+        try self.render(surface, focus_handler.focused_widget);
     }
+}
+
+fn doLayout(
+    self: *App,
+    widget: vxfw.Widget,
+    arena: *std.heap.ArenaAllocator,
+) !vxfw.Surface {
+    const vx = &self.vx;
+
+    const draw_context: vxfw.DrawContext = .{
+        .arena = arena.allocator(),
+        .min = .{ .width = 0, .height = 0 },
+        .max = .{
+            .width = @intCast(vx.screen.width),
+            .height = @intCast(vx.screen.height),
+        },
+        .cell_size = .{
+            .width = vx.screen.width_pix / vx.screen.width,
+            .height = vx.screen.height_pix / vx.screen.height,
+        },
+    };
+    return widget.draw(draw_context);
+}
+
+fn render(
+    self: *App,
+    surface: vxfw.Surface,
+    focused_widget: vxfw.Widget,
+) !void {
+    const vx = &self.vx;
+    const tty = &self.tty;
+
+    const win = vx.window();
+    win.clear();
+    win.hideCursor();
+    win.setCursorShape(.default);
+
+    const root_win = win.child(.{
+        .width = surface.size.width,
+        .height = surface.size.height,
+    });
+    surface.render(root_win, focused_widget);
+
+    var buffered = tty.bufferedWriter();
+    try vx.render(buffered.writer().any());
+    try buffered.flush();
 }
 
 fn addTick(self: *App, tick: vxfw.Tick) Allocator.Error!void {
@@ -211,6 +250,22 @@ fn handleCommand(self: *App, cmds: *vxfw.CommandList) Allocator.Error!void {
                         else => std.log.err("copy error: {}", .{err}),
                     }
                 };
+            },
+            .set_title => |title| {
+                self.vx.setTitle(self.tty.anyWriter(), title) catch |err| {
+                    std.log.err("set_title error: {}", .{err});
+                };
+            },
+            .queue_refresh => self.vx.queueRefresh(),
+            .notify => |notification| {
+                self.vx.notify(self.tty.anyWriter(), notification.title, notification.body) catch |err| {
+                    std.log.err("notify error: {}", .{err});
+                };
+                const alloc = cmds.allocator;
+                if (notification.title) |title| {
+                    alloc.free(title);
+                }
+                alloc.free(notification.body);
             },
         }
     }
@@ -234,6 +289,7 @@ fn checkTimers(self: *App, ctx: *vxfw.EventContext) anyerror!void {
 const MouseHandler = struct {
     last_frame: vxfw.Surface,
     last_hit_list: []vxfw.HitResult,
+    mouse: ?vaxis.Mouse,
 
     fn init(root: Widget) MouseHandler {
         return .{
@@ -244,6 +300,7 @@ const MouseHandler = struct {
                 .children = &.{},
             },
             .last_hit_list = &.{},
+            .mouse = null,
         };
     }
 
@@ -251,9 +308,74 @@ const MouseHandler = struct {
         gpa.free(self.last_hit_list);
     }
 
+    fn updateMouse(
+        self: *MouseHandler,
+        app: *App,
+        surface: vxfw.Surface,
+        ctx: *vxfw.EventContext,
+    ) anyerror!void {
+        const mouse = self.mouse orelse return;
+        // For mouse events we store the last frame and use that for hit testing
+        const last_frame = surface;
+
+        var hits = std.ArrayList(vxfw.HitResult).init(app.allocator);
+        defer hits.deinit();
+        const sub: vxfw.SubSurface = .{
+            .origin = .{ .row = 0, .col = 0 },
+            .surface = last_frame,
+            .z_index = 0,
+        };
+        const mouse_point: vxfw.Point = .{
+            .row = @intCast(mouse.row),
+            .col = @intCast(mouse.col),
+        };
+        if (sub.containsPoint(mouse_point)) {
+            try last_frame.hitTest(&hits, mouse_point);
+        }
+
+        // We store the hit list from the last mouse event to determine mouse_enter and mouse_leave
+        // events. If list a is the previous hit list, and list b is the current hit list:
+        // - Widgets in a but not in b get a mouse_leave event
+        // - Widgets in b but not in a get a mouse_enter event
+        // - Widgets in both receive nothing
+        const a = self.last_hit_list;
+        const b = hits.items;
+
+        // Find widgets in a but not b
+        for (a) |a_item| {
+            const a_widget = a_item.widget;
+            for (b) |b_item| {
+                const b_widget = b_item.widget;
+                if (a_widget.eql(b_widget)) break;
+            } else {
+                // a_item is not in b
+                try a_widget.handleEvent(ctx, .mouse_leave);
+                try app.handleCommand(&ctx.cmds);
+            }
+        }
+
+        // Widgets in b but not in a
+        for (b) |b_item| {
+            const b_widget = b_item.widget;
+            for (a) |a_item| {
+                const a_widget = a_item.widget;
+                if (b_widget.eql(a_widget)) break;
+            } else {
+                // b_item is not in a.
+                try b_widget.handleEvent(ctx, .mouse_enter);
+                try app.handleCommand(&ctx.cmds);
+            }
+        }
+
+        // Store a copy of this hit list for next frame
+        app.allocator.free(self.last_hit_list);
+        self.last_hit_list = try app.allocator.dupe(vxfw.HitResult, hits.items);
+    }
+
     fn handleMouse(self: *MouseHandler, app: *App, ctx: *vxfw.EventContext, mouse: vaxis.Mouse) anyerror!void {
         // For mouse events we store the last frame and use that for hit testing
         const last_frame = self.last_frame;
+        self.mouse = mouse;
 
         var hits = std.ArrayList(vxfw.HitResult).init(app.allocator);
         defer hits.deinit();
@@ -362,159 +484,39 @@ const MouseHandler = struct {
 /// Maintains a tree of focusable nodes. Delivers events to the currently focused node, walking up
 /// the tree until the event is handled
 const FocusHandler = struct {
-    arena: std.heap.ArenaAllocator,
-
-    root: Node,
-    focused: *Node,
+    root: Widget,
     focused_widget: vxfw.Widget,
     path_to_focused: std.ArrayList(Widget),
 
-    const Node = struct {
-        widget: Widget,
-        parent: ?*Node,
-        children: []*Node,
-
-        fn nextSibling(self: Node) ?*Node {
-            const parent = self.parent orelse return null;
-            const idx = for (0..parent.children.len) |i| {
-                const node = parent.children[i];
-                if (self.widget.eql(node.widget))
-                    break i;
-            } else unreachable;
-
-            // Return null if last child
-            if (idx == parent.children.len - 1)
-                return null
-            else
-                return parent.children[idx + 1];
-        }
-
-        fn prevSibling(self: Node) ?*Node {
-            const parent = self.parent orelse return null;
-            const idx = for (0..parent.children.len) |i| {
-                const node = parent.children[i];
-                if (self.widget.eql(node.widget))
-                    break i;
-            } else unreachable;
-
-            // Return null if first child
-            if (idx == 0)
-                return null
-            else
-                return parent.children[idx - 1];
-        }
-
-        fn lastChild(self: Node) ?*Node {
-            if (self.children.len > 0)
-                return self.children[self.children.len - 1]
-            else
-                return null;
-        }
-
-        fn firstChild(self: Node) ?*Node {
-            if (self.children.len > 0)
-                return self.children[0]
-            else
-                return null;
-        }
-
-        /// returns the next logical node in the tree
-        fn nextNode(self: *Node) *Node {
-            // If we have a sibling, we return it's first descendant line
-            if (self.nextSibling()) |sibling| {
-                var node = sibling;
-                while (node.firstChild()) |child| {
-                    node = child;
-                }
-                return node;
-            }
-
-            // If we don't have a sibling, we return our parent
-            if (self.parent) |parent| return parent;
-
-            // If we don't have a parent, we are the root and we return or first descendant
-            var node = self;
-            while (node.firstChild()) |child| {
-                node = child;
-            }
-            return node;
-        }
-
-        fn prevNode(self: *Node) *Node {
-            // If we have children, we return the last child descendant
-            if (self.children.len > 0) {
-                var node = self;
-                while (node.lastChild()) |child| {
-                    node = child;
-                }
-                return node;
-            }
-
-            // If we have siblings, we return the last descendant line of the sibling
-            if (self.prevSibling()) |sibling| {
-                var node = sibling;
-                while (node.lastChild()) |child| {
-                    node = child;
-                }
-                return node;
-            }
-
-            // If we don't have a sibling, we return our parent
-            if (self.parent) |parent| return parent;
-
-            // If we don't have a parent, we are the root and we return our last descendant
-            var node = self;
-            while (node.lastChild()) |child| {
-                node = child;
-            }
-            return node;
-        }
-    };
-
     fn init(allocator: Allocator, root: Widget) FocusHandler {
-        const node: Node = .{
-            .widget = root,
-            .parent = null,
-            .children = &.{},
-        };
         return .{
-            .root = node,
-            .focused = undefined,
+            .root = root,
             .focused_widget = root,
-            .arena = std.heap.ArenaAllocator.init(allocator),
             .path_to_focused = std.ArrayList(Widget).init(allocator),
         };
     }
 
-    fn intrusiveInit(self: *FocusHandler) void {
-        self.focused = &self.root;
-    }
-
     fn deinit(self: *FocusHandler) void {
         self.path_to_focused.deinit();
-        self.arena.deinit();
     }
 
     /// Update the focus list
-    fn update(self: *FocusHandler, root: vxfw.Surface) Allocator.Error!void {
-        _ = self.arena.reset(.retain_capacity);
-
-        var list = std.ArrayList(*Node).init(self.arena.allocator());
-        for (root.children) |child| {
-            try self.findFocusableChildren(&self.root, &list, child.surface);
-        }
-
-        // Update children
-        self.root.children = list.items;
-
-        // Update path
+    fn update(self: *FocusHandler, surface: vxfw.Surface) Allocator.Error!void {
+        // clear path
         self.path_to_focused.clearAndFree();
-        if (!self.root.widget.eql(root.widget)) {
-            // Always make sure the root widget (the one we started with) is the first item, even if
-            // it isn't focusable or in the path
-            try self.path_to_focused.append(self.root.widget);
+
+        // Find the path to the focused widget. This builds a list that has the first element as the
+        // focused widget, and walks backward to the root. It's possible our focused widget is *not*
+        // in this tree. If this is the case, we refocus to the root widget
+        const has_focus = try self.childHasFocus(surface);
+
+        // We assert that the focused widget *must* be in the widget tree. There is certianly a
+        // logic bug in the code somewhere if this is not the case
+        assert(has_focus); // Focused widget not found in Surface tree
+        if (!self.root.eql(surface.widget)) {
+            // If the root of surface is not the initial widget, we append the initial widget
+            try self.path_to_focused.append(self.root);
         }
-        _ = try childHasFocus(root, &self.path_to_focused, self.focused.widget);
 
         // reverse path_to_focused so that it is root first
         std.mem.reverse(Widget, self.path_to_focused.items);
@@ -522,62 +524,27 @@ const FocusHandler = struct {
 
     /// Returns true if a child of surface is the focused widget
     fn childHasFocus(
+        self: *FocusHandler,
         surface: vxfw.Surface,
-        list: *std.ArrayList(Widget),
-        focused: Widget,
     ) Allocator.Error!bool {
         // Check if we are the focused widget
-        if (focused.eql(surface.widget)) {
-            try list.append(surface.widget);
+        if (self.focused_widget.eql(surface.widget)) {
+            try self.path_to_focused.append(surface.widget);
             return true;
         }
         for (surface.children) |child| {
             // Add child to list if it is the focused widget or one of it's own children is
-            if (try childHasFocus(child.surface, list, focused)) {
-                try list.append(surface.widget);
+            if (try self.childHasFocus(child.surface)) {
+                try self.path_to_focused.append(surface.widget);
                 return true;
             }
         }
         return false;
     }
 
-    /// Walks the surface tree, adding all focusable nodes to list
-    fn findFocusableChildren(
-        self: *FocusHandler,
-        parent: *Node,
-        list: *std.ArrayList(*Node),
-        surface: vxfw.Surface,
-    ) Allocator.Error!void {
-        if (self.root.widget.eql(surface.widget)) {
-            // Never add the root_widget. We will always have this as the root
-            for (surface.children) |child| {
-                try self.findFocusableChildren(parent, list, child.surface);
-            }
-        } else if (surface.focusable) {
-            // We are a focusable child of parent. Create a new node, and find our own focusable
-            // children
-            const node = try self.arena.allocator().create(Node);
-            var child_list = std.ArrayList(*Node).init(self.arena.allocator());
-            for (surface.children) |child| {
-                try self.findFocusableChildren(node, &child_list, child.surface);
-            }
-            node.* = .{
-                .widget = surface.widget,
-                .parent = parent,
-                .children = child_list.items,
-            };
-            if (self.focused_widget.eql(surface.widget)) {
-                self.focused = node;
-            }
-            try list.append(node);
-        } else {
-            for (surface.children) |child| {
-                try self.findFocusableChildren(parent, list, child.surface);
-            }
-        }
-    }
-
     fn focusWidget(self: *FocusHandler, ctx: *vxfw.EventContext, widget: vxfw.Widget) anyerror!void {
+        // Focusing a widget requires it to have an event handler
+        assert(widget.eventHandler != null);
         if (self.focused_widget.eql(widget)) return;
 
         ctx.phase = .at_target;
@@ -586,45 +553,26 @@ const FocusHandler = struct {
         try self.focused_widget.handleEvent(ctx, .focus_in);
     }
 
-    fn focusNode(self: *FocusHandler, ctx: *vxfw.EventContext, node: *Node) anyerror!void {
-        if (self.focused.widget.eql(node.widget)) return;
-
-        try self.focused.widget.handleEvent(ctx, .focus_out);
-        self.focused = node;
-        try self.focused.widget.handleEvent(ctx, .focus_in);
-    }
-
-    /// Focuses the next focusable widget
-    fn focusNext(self: *FocusHandler, ctx: *vxfw.EventContext) anyerror!void {
-        return self.focusNode(ctx, self.focused.nextNode());
-    }
-
-    /// Focuses the previous focusable widget
-    fn focusPrev(self: *FocusHandler, ctx: *vxfw.EventContext) anyerror!void {
-        return self.focusNode(ctx, self.focused.prevNode());
-    }
-
     fn handleEvent(self: *FocusHandler, ctx: *vxfw.EventContext, event: vxfw.Event) anyerror!void {
         const path = self.path_to_focused.items;
-        if (path.len == 0) return;
+        assert(path.len > 0);
 
-        const target_idx = path.len - 1;
-
-        // Capturing phase
+        // Capturing phase. We send capture events from the root to the target (inclusive of target)
         ctx.phase = .capturing;
-        for (path[0..target_idx]) |widget| {
+        for (path) |widget| {
             try widget.captureEvent(ctx, event);
             if (ctx.consume_event) return;
         }
 
-        // Target phase
+        // Target phase. This is only sent to the target
         ctx.phase = .at_target;
-        const target = path[target_idx];
+        const target = self.path_to_focused.getLast();
         try target.handleEvent(ctx, event);
         if (ctx.consume_event) return;
 
-        // Bubbling phase
+        // Bubbling phase. Bubbling phase moves from target (exclusive) to the root
         ctx.phase = .bubbling;
+        const target_idx = path.len - 1;
         var iter = std.mem.reverseIterator(path[0..target_idx]);
         while (iter.next()) |widget| {
             try widget.handleEvent(ctx, event);
