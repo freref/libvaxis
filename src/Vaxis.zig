@@ -409,8 +409,13 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
     } = .{};
 
     // Clear all images
-    if (self.caps.kitty_graphics)
-        try tty.writeAll(ctlseqs.tmux_kitty_graphics_clear);
+    if (self.caps.kitty_graphics) {
+        if (self.caps.tmux) {
+            try tty.writeAll(ctlseqs.tmux_kitty_graphics_clear);
+        } else {
+            try tty.writeAll(ctlseqs.kitty_graphics_clear);
+        }
+    }
 
     // Reset skip flag on all last_screen cells
     for (self.screen_last.buf) |*last_cell| {
@@ -512,10 +517,17 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
         }
 
         if (cell.image) |img| {
-            try tty.print(
-                ctlseqs.tmux_kitty_graphics_preamble,
-                .{img.img_id},
-            );
+            if (self.caps.tmux) {
+                try tty.print(
+                    ctlseqs.tmux_kitty_graphics_preamble,
+                    .{img.img_id},
+                );
+            } else {
+                try tty.print(
+                    ctlseqs.kitty_graphics_preamble,
+                    .{img.img_id},
+                );
+            }
             if (img.options.pixel_offset) |offset| {
                 try tty.print(
                     ",X={d},Y={d}",
@@ -541,7 +553,11 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
             if (img.options.z_index) |z| {
                 try tty.print(",z={d}", .{z});
             }
-            try tty.writeAll(ctlseqs.tmux_kitty_graphics_closing);
+            if (self.caps.tmux) {
+                try tty.writeAll(ctlseqs.tmux_kitty_graphics_closing);
+            } else {
+                try tty.writeAll(ctlseqs.kitty_graphics_closing);
+            }
         }
 
         // something is different, so let's loop through everything and
@@ -1211,10 +1227,17 @@ pub fn prettyPrint(self: *Vaxis, tty: *IoWriter) !void {
         }
 
         if (cell.image) |img| {
-            try tty.print(
-                ctlseqs.tmux_kitty_graphics_preamble,
-                .{img.img_id},
-            );
+            if (self.caps.tmux) {
+                try tty.print(
+                    ctlseqs.tmux_kitty_graphics_preamble,
+                    .{img.img_id},
+                );
+            } else {
+                try tty.print(
+                    ctlseqs.kitty_graphics_preamble,
+                    .{img.img_id},
+                );
+            }
             if (img.options.pixel_offset) |offset| {
                 try tty.print(
                     ",X={d},Y={d}",
@@ -1240,7 +1263,11 @@ pub fn prettyPrint(self: *Vaxis, tty: *IoWriter) !void {
             if (img.options.z_index) |z| {
                 try tty.print(",z={d}", .{z});
             }
-            try tty.writeAll(ctlseqs.tmux_kitty_graphics_closing);
+            if (self.caps.tmux) {
+                try tty.writeAll(ctlseqs.tmux_kitty_graphics_closing);
+            } else {
+                try tty.writeAll(ctlseqs.kitty_graphics_closing);
+            }
         }
 
         // something is different, so let's loop through everything and
