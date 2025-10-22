@@ -134,7 +134,7 @@ pub const osc52_clipboard_request = "\x1b]52;c;?\x1b\\";
 
 // Kitty graphics
 pub const kitty_graphics_clear = "\x1b_Ga=d\x1b\\";
-pub const kitty_graphics_preamble = "\x1b_Ga=p,i={d}";
+pub const kitty_graphics_preamble = "\x1bPtmux;\x1b\x1b_Ga=p,i={d}";
 pub const kitty_graphics_closing = ",C=1\x1b\\";
 
 // Color control sequences

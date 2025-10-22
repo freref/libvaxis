@@ -930,7 +930,7 @@ pub fn transmitPreEncodedImage(
     height: u16,
     format: Image.TransmitFormat,
 ) !Image {
-    if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    // if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
 
     defer self.next_img_id += 1;
     const id = self.next_img_id;
@@ -941,9 +941,11 @@ pub fn transmitPreEncodedImage(
         .png => 100,
     };
 
+    log.debug("bytes len {}", .{bytes.len});
+
     if (bytes.len < 4096) {
         try tty.print(
-            "\x1b_Gf={d},s={d},v={d},i={d};{s}\x1b\\",
+            "\x1bPtmux;\x1b\x1b_Gf={d},s={d},v={d},i={d};{s}\x1b\x1b\\\x1b\\",
             .{
                 fmt,
                 width,
@@ -956,14 +958,14 @@ pub fn transmitPreEncodedImage(
         var n: usize = 4096;
 
         try tty.print(
-            "\x1b_Gf={d},s={d},v={d},i={d},m=1;{s}\x1b\\",
+            "\x1bPtmux;\x1b\x1b_Gf={d},s={d},v={d},i={d},m=1;{s}\x1b\x1b\\\x1b\\",
             .{ fmt, width, height, id, bytes[0..n] },
         );
         while (n < bytes.len) : (n += 4096) {
             const end: usize = @min(n + 4096, bytes.len);
             const m: u2 = if (end == bytes.len) 0 else 1;
             try tty.print(
-                "\x1b_Gm={d};{s}\x1b\\",
+                "\x1bPtmux;\x1b\x1b_Gm={d};{s}\x1b\x1b\\\x1b\\",
                 .{
                     m,
                     bytes[n..end],
@@ -987,7 +989,7 @@ pub fn transmitImage(
     img: *zigimg.Image,
     format: Image.TransmitFormat,
 ) !Image {
-    if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    // if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
 
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
@@ -1020,7 +1022,7 @@ pub fn loadImage(
     tty: *IoWriter,
     src: Image.Source,
 ) !Image {
-    if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    // if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
 
     var read_buffer: [1024 * 1024]u8 = undefined; // 1MB buffer
     var img = switch (src) {
@@ -1033,7 +1035,7 @@ pub fn loadImage(
 
 /// deletes an image from the terminal's memory
 pub fn freeImage(_: Vaxis, tty: *IoWriter, id: u32) void {
-    tty.print("\x1b_Ga=d,d=I,i={d};\x1b\\", .{id}) catch |err| {
+    tty.print("\x1bPtmux\x1b\x1b_Ga=d,d=I,i={d};\x1b\x1b\\\x1b\\", .{id}) catch |err| {
         log.err("couldn't delete image {d}: {}", .{ id, err });
         return;
     };
