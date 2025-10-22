@@ -51,6 +51,7 @@ buf: [128]u8 = undefined,
 /// If an unknown event is found, Result.event will be null and Result.n will be
 /// greater than 0
 pub fn parse(self: *Parser, input: []const u8, paste_allocator: ?std.mem.Allocator) !Result {
+    log.debug("parsing {any}", .{input});
     std.debug.assert(input.len > 0);
 
     // We gate this for len > 1 so we can detect singular escape key presses

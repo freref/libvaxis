@@ -266,6 +266,8 @@ pub fn handleTmux(self: *Vaxis) void {
 /// you are using Loop.run()
 pub fn queryTerminalSend(vx: *Vaxis, tty: *IoWriter) !void {
     vx.handleTmux();
+    if (vx.caps.tmux)
+        log.debug("detected tmux session", .{});
     vx.queries_done.store(false, .unordered);
 
     // TODO: re-enable this
@@ -284,7 +286,7 @@ pub fn queryTerminalSend(vx: *Vaxis, tty: *IoWriter) !void {
     // _ = try tty.write(ctlseqs.decrqm_focus);
     // _ = try tty.write(ctlseqs.decrqm_sync);
 
-    try tty.writeAll(ctlseqs.decrqm_sgr_pixels ++
+    const query = (ctlseqs.decrqm_sgr_pixels ++
         ctlseqs.decrqm_unicode ++
         ctlseqs.decrqm_color_scheme ++
         ctlseqs.in_band_resize_set ++
@@ -308,8 +310,13 @@ pub fn queryTerminalSend(vx: *Vaxis, tty: *IoWriter) !void {
         ctlseqs.cursor_position_request ++
         ctlseqs.xtversion ++
         ctlseqs.csi_u_query ++
-        ctlseqs.tmux_kitty_graphics_query ++
         ctlseqs.primary_device_attrs);
+
+    if (vx.caps.tmux) {
+        try tty.writeAll(query ++ ctlseqs.tmux_kitty_graphics_query);
+    } else {
+        try tty.writeAll(query ++ ctlseqs.kitty_graphics_query);
+    }
 
     try tty.flush();
 }
@@ -938,7 +945,7 @@ pub fn transmitPreEncodedImage(
     height: u16,
     format: Image.TransmitFormat,
 ) !Image {
-    // if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
 
     defer self.next_img_id += 1;
     const id = self.next_img_id;
