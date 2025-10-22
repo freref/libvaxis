@@ -133,9 +133,12 @@ pub const osc52_clipboard_copy = "\x1b]52;c;{s}\x1b\\";
 pub const osc52_clipboard_request = "\x1b]52;c;?\x1b\\";
 
 // Kitty graphics
-pub const kitty_graphics_clear = "\x1bPtmux;\x1b\x1b_Ga=d\x1b\x1b\\\x1b\\";
-pub const kitty_graphics_preamble = "\x1bPtmux;\x1b\x1b_Ga=p,i={d}";
-pub const kitty_graphics_closing = ",C=1\x1b\\\x1b\\";
+// pub const kitty_graphics_clear = "\x1bPtmux;\x1b\x1b_Ga=d\x1b\x1b\\\x1b\\";
+// pub const kitty_graphics_preamble = "\x1bPtmux;\x1b\x1b_Ga=p,i={d}";
+// pub const kitty_graphics_closing = ",C=1\x1b\\\x1b\\";
+pub const kitty_graphics_clear = "\x1b_Ga=d\x1b\\";
+pub const kitty_graphics_preamble = "\x1b_Ga=p,i={d}";
+pub const kitty_graphics_closing = ",C=1\x1b\\";
 
 // Color control sequences
 pub const osc4_query = "\x1b]4;{d};?\x1b\\"; // color index {d}
@@ -149,3 +152,37 @@ pub const osc11_reset = "\x1b]111\x1b\\"; // reset bg to terminal default
 pub const osc12_query = "\x1b]12;?\x1b\\"; // cursor color
 pub const osc12_set = "\x1b]12;rgb:{x:0>2}{x:0>2}/{x:0>2}{x:0>2}/{x:0>2}{x:0>2}\x1b\\"; // set terminal cursor color
 pub const osc12_reset = "\x1b]112\x1b\\"; // reset cursor to terminal default
+
+// Tmux sequences
+fn wrapTmux(comptime query: []const u8) []const u8 {
+    comptime var buf: []const u8 = "";
+    for (query) |c| {
+        if (c == '\x1b') {
+            buf = buf ++ "\x1b\x1b";
+        } else {
+            buf = buf ++ [_]u8{c};
+        }
+    }
+    return "\x1bPtmux;" ++ buf ++ "\x1b\\";
+}
+
+pub const tmux_primary_device_attrs = wrapTmux(primary_device_attrs);
+pub const tmux_tertiary_device_attrs = wrapTmux(tertiary_device_attrs);
+pub const tmux_device_status_report = wrapTmux(device_status_report);
+pub const tmux_xtversion = wrapTmux(xtversion);
+pub const tmux_decrqm_focus = wrapTmux(decrqm_focus);
+pub const tmux_decrqm_sgr_pixels = wrapTmux(decrqm_sgr_pixels);
+pub const tmux_decrqm_sync = wrapTmux(decrqm_sync);
+pub const tmux_decrqm_unicode = wrapTmux(decrqm_unicode);
+pub const tmux_decrqm_color_scheme = wrapTmux(decrqm_color_scheme);
+pub const tmux_csi_u_query = wrapTmux(csi_u_query);
+pub const tmux_kitty_graphics_query = wrapTmux(kitty_graphics_query);
+pub const tmux_sixel_geometry_query = wrapTmux(sixel_geometry_query);
+pub const tmux_cursor_position_request = wrapTmux(cursor_position_request);
+pub const tmux_explicit_width_query = wrapTmux(explicit_width_query);
+pub const tmux_scaled_text_query = wrapTmux(scaled_text_query);
+pub const tmux_multi_cursor_query = wrapTmux(multi_cursor_query);
+
+pub const tmux_kitty_graphics_clear = wrapTmux(kitty_graphics_clear);
+pub const tmux_kitty_graphics_preamble = "\x1bPtmux;\x1b\x1b_Ga=p,i={d}";
+pub const tmux_kitty_graphics_closing = ",C=1\x1b\\\x1b\\";

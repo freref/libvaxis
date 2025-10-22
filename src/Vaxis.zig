@@ -283,6 +283,7 @@ pub fn queryTerminalSend(vx: *Vaxis, tty: *IoWriter) !void {
     // doesn't hurt to blindly use them
     // _ = try tty.write(ctlseqs.decrqm_focus);
     // _ = try tty.write(ctlseqs.decrqm_sync);
+
     try tty.writeAll(ctlseqs.decrqm_sgr_pixels ++
         ctlseqs.decrqm_unicode ++
         ctlseqs.decrqm_color_scheme ++
@@ -307,7 +308,7 @@ pub fn queryTerminalSend(vx: *Vaxis, tty: *IoWriter) !void {
         ctlseqs.cursor_position_request ++
         ctlseqs.xtversion ++
         ctlseqs.csi_u_query ++
-        ctlseqs.kitty_graphics_query ++
+        ctlseqs.tmux_kitty_graphics_query ++
         ctlseqs.primary_device_attrs);
 
     try tty.flush();
@@ -402,7 +403,7 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
 
     // Clear all images
     if (self.caps.kitty_graphics)
-        try tty.writeAll(ctlseqs.kitty_graphics_clear);
+        try tty.writeAll(ctlseqs.tmux_kitty_graphics_clear);
 
     // Reset skip flag on all last_screen cells
     for (self.screen_last.buf) |*last_cell| {
@@ -505,7 +506,7 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
 
         if (cell.image) |img| {
             try tty.print(
-                ctlseqs.kitty_graphics_preamble,
+                ctlseqs.tmux_kitty_graphics_preamble,
                 .{img.img_id},
             );
             if (img.options.pixel_offset) |offset| {
@@ -533,7 +534,7 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
             if (img.options.z_index) |z| {
                 try tty.print(",z={d}", .{z});
             }
-            try tty.writeAll(ctlseqs.kitty_graphics_closing);
+            try tty.writeAll(ctlseqs.tmux_kitty_graphics_closing);
         }
 
         // something is different, so let's loop through everything and
@@ -1204,7 +1205,7 @@ pub fn prettyPrint(self: *Vaxis, tty: *IoWriter) !void {
 
         if (cell.image) |img| {
             try tty.print(
-                ctlseqs.kitty_graphics_preamble,
+                ctlseqs.tmux_kitty_graphics_preamble,
                 .{img.img_id},
             );
             if (img.options.pixel_offset) |offset| {
@@ -1232,7 +1233,7 @@ pub fn prettyPrint(self: *Vaxis, tty: *IoWriter) !void {
             if (img.options.z_index) |z| {
                 try tty.print(",z={d}", .{z});
             }
-            try tty.writeAll(ctlseqs.kitty_graphics_closing);
+            try tty.writeAll(ctlseqs.tmux_kitty_graphics_closing);
         }
 
         // something is different, so let's loop through everything and
