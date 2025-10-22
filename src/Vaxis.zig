@@ -907,7 +907,7 @@ pub fn transmitLocalImagePath(
     medium: Image.TransmitMedium,
     format: Image.TransmitFormat,
 ) !Image {
-    if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    if (!self.caps.kitty_graphics and !self.caps.tmux) return error.NoGraphicsCapability;
 
     defer self.next_img_id += 1;
 
@@ -964,7 +964,7 @@ pub fn transmitPreEncodedImage(
     height: u16,
     format: Image.TransmitFormat,
 ) !Image {
-    if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    if (!self.caps.kitty_graphics and !self.caps.tmux) return error.NoGraphicsCapability;
 
     defer self.next_img_id += 1;
     const id = self.next_img_id;
@@ -978,33 +978,44 @@ pub fn transmitPreEncodedImage(
     log.debug("bytes len {}", .{bytes.len});
 
     if (bytes.len < 4096) {
-        try tty.print(
-            "\x1bPtmux;\x1b\x1b_Gf={d},s={d},v={d},i={d};{s}\x1b\x1b\\\x1b\\",
-            .{
-                fmt,
-                width,
-                height,
-                id,
-                bytes,
-            },
-        );
+        if (self.caps.tmux) {
+            try tty.print(
+                ctlseqs.tmux_kitty_transmit_one_chunk,
+                .{ fmt, width, height, id, bytes },
+            );
+        } else {
+            try tty.print(
+                ctlseqs.kitty_transmit_one_chunk,
+                .{ fmt, width, height, id, bytes },
+            );
+        }
     } else {
         var n: usize = 4096;
-
-        try tty.print(
-            "\x1bPtmux;\x1b\x1b_Gf={d},s={d},v={d},i={d},m=1;{s}\x1b\x1b\\\x1b\\",
-            .{ fmt, width, height, id, bytes[0..n] },
-        );
+        if (self.caps.tmux) {
+            try tty.print(
+                ctlseqs.tmux_kitty_transmit_first_chunk,
+                .{ fmt, width, height, id, bytes[0..n] },
+            );
+        } else {
+            try tty.print(
+                ctlseqs.kitty_transmit_first_chunk,
+                .{ fmt, width, height, id, bytes[0..n] },
+            );
+        }
         while (n < bytes.len) : (n += 4096) {
             const end: usize = @min(n + 4096, bytes.len);
             const m: u2 = if (end == bytes.len) 0 else 1;
-            try tty.print(
-                "\x1bPtmux;\x1b\x1b_Gm={d};{s}\x1b\x1b\\\x1b\\",
-                .{
-                    m,
-                    bytes[n..end],
-                },
-            );
+            if (self.caps.tmux) {
+                try tty.print(
+                    ctlseqs.tmux_kitty_transmit_data_chunk,
+                    .{ m, bytes[n..end] },
+                );
+            } else {
+                try tty.print(
+                    ctlseqs.kitty_transmit_data_chunk,
+                    .{ m, bytes[n..end] },
+                );
+            }
         }
     }
 
@@ -1023,7 +1034,7 @@ pub fn transmitImage(
     img: *zigimg.Image,
     format: Image.TransmitFormat,
 ) !Image {
-    // if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    if (!self.caps.kitty_graphics and !self.caps.tmux) return error.NoGraphicsCapability;
 
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
@@ -1056,7 +1067,7 @@ pub fn loadImage(
     tty: *IoWriter,
     src: Image.Source,
 ) !Image {
-    // if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    if (!self.caps.kitty_graphics and !self.caps.tmux) return error.NoGraphicsCapability;
 
     var read_buffer: [1024 * 1024]u8 = undefined; // 1MB buffer
     var img = switch (src) {
