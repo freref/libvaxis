@@ -309,13 +309,16 @@ pub fn queryTerminalSend(vx: *Vaxis, tty: *IoWriter) !void {
         ctlseqs.multi_cursor_query ++
         ctlseqs.cursor_position_request ++
         ctlseqs.xtversion ++
-        ctlseqs.csi_u_query ++
-        ctlseqs.primary_device_attrs);
+        ctlseqs.csi_u_query);
 
     if (vx.caps.tmux) {
-        try tty.writeAll(query ++ ctlseqs.tmux_kitty_graphics_query);
+        try tty.writeAll(query ++
+            ctlseqs.tmux_kitty_graphics_query ++
+            ctlseqs.primary_device_attrs);
     } else {
-        try tty.writeAll(query ++ ctlseqs.kitty_graphics_query);
+        try tty.writeAll(query ++
+            ctlseqs.kitty_graphics_query ++
+            ctlseqs.primary_device_attrs);
     }
 
     try tty.flush();
