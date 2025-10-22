@@ -30,6 +30,7 @@ const Vaxis = @This();
 const log = std.log.scoped(.vaxis);
 
 pub const Capabilities = struct {
+    tmux: bool = true,
     kitty_keyboard: bool = false,
     kitty_graphics: bool = false,
     rgb: bool = false,
@@ -255,10 +256,16 @@ pub fn queryTerminal(self: *Vaxis, tty: *IoWriter, timeout_ns: u64) !void {
     try self.enableDetectedFeatures(tty);
 }
 
+pub fn handleTmux(self: *Vaxis) void {
+    if (builtin.os.tag == .windows) return;
+    if (std.posix.getenv("TMUX")) |_| self.caps.tmux = true;
+}
+
 /// write queries to the terminal to determine capabilities. This function
 /// is only for use with a custom main loop. Call Vaxis.queryTerminal() if
 /// you are using Loop.run()
 pub fn queryTerminalSend(vx: *Vaxis, tty: *IoWriter) !void {
+    vx.handleTmux();
     vx.queries_done.store(false, .unordered);
 
     // TODO: re-enable this

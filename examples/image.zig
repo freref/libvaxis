@@ -42,10 +42,10 @@ pub fn main() !void {
         try vx.transmitImage(alloc, tty.writer(), &img1, .rgba),
         // var img1 = try vaxis.zigimg.Image.fromFilePath(alloc, "examples/zig.png");
         // try vx.loadImage(alloc, tty.writer(), .{ .path = "examples/zig.png" }),
-        // try vx.loadImage(alloc, tty.writer(), .{ .path = "examples/vaxis.png" }),
+        try vx.loadImage(alloc, tty.writer(), .{ .path = "examples/vaxis.png" }),
     };
-    // defer vx.freeImage(tty.writer(), imgs[0].id);
-    // defer vx.freeImage(tty.writer(), imgs[1].id);
+    defer vx.freeImage(tty.writer(), imgs[0].id);
+    defer vx.freeImage(tty.writer(), imgs[1].id);
 
     var n: usize = 0;
 
