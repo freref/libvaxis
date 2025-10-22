@@ -134,6 +134,7 @@ pub const osc52_clipboard_request = "\x1b]52;c;?\x1b\\";
 
 // Kitty graphics
 pub const kitty_graphics_clear = "\x1b_Ga=d\x1b\\";
+pub const kitty_graphics_free = "\x1b_Ga=d,d=I,i={d};\x1b\\";
 pub const kitty_graphics_preamble = "\x1b_Ga=p,i={d}";
 pub const kitty_graphics_closing = ",C=1\x1b\\";
 
@@ -165,5 +166,6 @@ fn wrapTmux(comptime query: []const u8) []const u8 {
 
 pub const tmux_kitty_graphics_query = wrapTmux(kitty_graphics_query);
 pub const tmux_kitty_graphics_clear = wrapTmux(kitty_graphics_clear);
+pub const tmux_kitty_graphics_free = wrapTmux(kitty_graphics_free);
 pub const tmux_kitty_graphics_preamble = "\x1bPtmux;\x1b\x1b_Ga=p,i={d}";
 pub const tmux_kitty_graphics_closing = ",C=1\x1b\\\x1b\\";

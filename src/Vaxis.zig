@@ -1065,11 +1065,19 @@ pub fn loadImage(
 }
 
 /// deletes an image from the terminal's memory
-pub fn freeImage(_: Vaxis, tty: *IoWriter, id: u32) void {
-    tty.print("\x1bPtmux\x1b\x1b_Ga=d,d=I,i={d};\x1b\x1b\\\x1b\\", .{id}) catch |err| {
-        log.err("couldn't delete image {d}: {}", .{ id, err });
-        return;
-    };
+pub fn freeImage(self: *Vaxis, tty: *IoWriter, id: u32) void {
+    if (self.caps.tmux) {
+        tty.print(ctlseqs.tmux_kitty_graphics_free, .{id}) catch |err| {
+            log.err("couldn't delete image {d}: {}", .{ id, err });
+            return;
+        };
+    } else {
+        tty.print(ctlseqs.kitty_graphics_free, .{id}) catch |err| {
+            log.err("couldn't delete image {d}: {}", .{ id, err });
+            return;
+        };
+    }
+
     tty.flush() catch {};
 }
 
