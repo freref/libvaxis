@@ -30,7 +30,7 @@ const Vaxis = @This();
 const log = std.log.scoped(.vaxis);
 
 pub const Capabilities = struct {
-    tmux: bool = true,
+    tmux: bool = false,
     kitty_keyboard: bool = false,
     kitty_graphics: bool = false,
     rgb: bool = false,

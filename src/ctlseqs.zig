@@ -169,11 +169,14 @@ fn wrapTmux(comptime query: []const u8) []const u8 {
     return "\x1bPtmux;" ++ buf ++ "\x1b\\";
 }
 
-pub const tmux_kitty_transmit_one_chunk = wrapTmux(kitty_transmit_one_chunk);
+pub const tmux_kitty_transmit_one_chunk = "\x1bPtmux;\x1b\x1b_Gf={d},s={d},v={d},i={d},q=2;{s}\x1b\\\x1b\\";
+pub const tmux_kitty_transmit_first_chunk = "\x1bPtmux;\x1b\x1b_Gf={d},s={d},v={d},i={d},m=1,q=2;{s}\x1b\\\x1b\\";
+pub const tmux_kitty_transmit_data_chunk = "\x1bPtmux;\x1b\x1b_Gm={d},q=2;{s}\x1b\\\x1b\\";
+pub const tmux_kitty_graphics_preamble = "\x1bPtmux;\x1b\x1b_Ga=p,U=1,q=2,i={d}";
+// pub const tmux_kitty_transmit_one_chunk = wrapTmux(kitty_transmit_one_chunk);
+// pub const tmux_kitty_transmit_first_chunk = wrapTmux(kitty_transmit_first_chunk);
+// pub const tmux_kitty_transmit_data_chunk = wrapTmux(kitty_transmit_data_chunk);
 pub const tmux_kitty_graphics_query = wrapTmux(kitty_graphics_query);
-pub const tmux_kitty_transmit_first_chunk = wrapTmux(kitty_transmit_first_chunk);
 pub const tmux_kitty_graphics_clear = wrapTmux(kitty_graphics_clear);
-pub const tmux_kitty_transmit_data_chunk = wrapTmux(kitty_transmit_data_chunk);
 pub const tmux_kitty_graphics_free = wrapTmux(kitty_graphics_free);
-pub const tmux_kitty_graphics_preamble = "\x1bPtmux;\x1b\x1b_Ga=p,i={d}";
 pub const tmux_kitty_graphics_closing = ",C=1\x1b\\\x1b\\";
