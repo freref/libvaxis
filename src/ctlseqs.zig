@@ -149,3 +149,17 @@ pub const osc11_reset = "\x1b]111\x1b\\"; // reset bg to terminal default
 pub const osc12_query = "\x1b]12;?\x1b\\"; // cursor color
 pub const osc12_set = "\x1b]12;rgb:{x:0>2}{x:0>2}/{x:0>2}{x:0>2}/{x:0>2}{x:0>2}\x1b\\"; // set terminal cursor color
 pub const osc12_reset = "\x1b]112\x1b\\"; // reset cursor to terminal default
+
+// Tmux passthrough sequences
+// In tmux, escape sequences must be wrapped in DCS (Device Control String) passthrough
+// and all escape characters inside must be doubled
+pub const tmux_start = "\x1bPtmux;";
+pub const tmux_end = "\x1b\\";
+pub const tmux_esc = "\x1b\x1b"; // doubled escape for inside tmux passthrough
+
+// Kitty graphics for tmux (with quiet mode q=2 and virtual placement U=1)
+// These use doubled escapes and quiet mode to work within tmux
+pub const tmux_kitty_graphics_clear = "\x1bPtmux;\x1b\x1b_Ga=d,q=2\x1b\x1b\\\x1b\\";
+pub const tmux_kitty_graphics_delete = "\x1bPtmux;\x1b\x1b_Ga=d,d=I,i={d},q=2\x1b\x1b\\\x1b\\";
+// Virtual placement preamble for tmux - creates a virtual placement that uses Unicode placeholders
+pub const tmux_kitty_graphics_virtual_placement = "\x1bPtmux;\x1b\x1b_Ga=p,U=1,i={d},c={d},r={d},q=2\x1b\x1b\\\x1b\\";

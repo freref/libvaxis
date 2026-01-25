@@ -22,6 +22,7 @@ const Winsize = @import("main.zig").Winsize;
 
 const ctlseqs = @import("ctlseqs.zig");
 const gwidth = @import("gwidth.zig");
+const unicode_placeholder = @import("unicode_placeholder.zig");
 
 const assert = std.debug.assert;
 
@@ -32,6 +33,9 @@ const log = std.log.scoped(.vaxis);
 pub const Capabilities = struct {
     kitty_keyboard: bool = false,
     kitty_graphics: bool = false,
+    /// When true, we're running inside tmux and need to use Unicode placeholders
+    /// for image display instead of direct kitty graphics placement
+    tmux: bool = false,
     rgb: bool = false,
     unicode: gwidth.Method = .wcwidth,
     sgr_pixels: bool = false,
@@ -255,10 +259,20 @@ pub fn queryTerminal(self: *Vaxis, tty: *IoWriter, timeout_ns: u64) !void {
     try self.enableDetectedFeatures(tty);
 }
 
+/// Detect if we're running inside tmux
+fn detectTmux(vx: *Vaxis) void {
+    if (builtin.os.tag == .windows) return;
+    if (std.posix.getenv("TMUX")) |_| {
+        vx.caps.tmux = true;
+        log.debug("detected tmux session", .{});
+    }
+}
+
 /// write queries to the terminal to determine capabilities. This function
 /// is only for use with a custom main loop. Call Vaxis.queryTerminal() if
 /// you are using Loop.run()
 pub fn queryTerminalSend(vx: *Vaxis, tty: *IoWriter) !void {
+    vx.detectTmux();
     vx.queries_done.store(false, .unordered);
 
     // TODO: re-enable this
@@ -412,8 +426,11 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
             cursor_pos_ptr.* = .{};
             reposition_ptr.* = true;
             // Clear all images
-            if (vx.caps.kitty_graphics)
+            if (vx.caps.tmux) {
+                try io.writeAll(ctlseqs.tmux_kitty_graphics_clear);
+            } else if (vx.caps.kitty_graphics) {
                 try io.writeAll(ctlseqs.kitty_graphics_clear);
+            }
         }
     };
 
@@ -524,36 +541,103 @@ pub fn render(self: *Vaxis, tty: *IoWriter) !void {
         }
 
         if (cell.image) |img| {
-            try tty.print(
-                ctlseqs.kitty_graphics_preamble,
-                .{img.img_id},
-            );
-            if (img.options.pixel_offset) |offset| {
+            if (self.caps.tmux) {
+                // In tmux, use Unicode placeholders for image display
+                // Get image dimensions in cells
+                const img_rows: u16 = if (img.options.size) |s| s.rows orelse 1 else 1;
+                const img_cols: u16 = if (img.options.size) |s| s.cols orelse 1 else 1;
+
+                // Create virtual placement (tells terminal the image size)
                 try tty.print(
-                    ",X={d},Y={d}",
-                    .{ offset.x, offset.y },
+                    "\x1bPtmux;\x1b\x1b_Ga=p,U=1,i={d},c={d},r={d},q=2\x1b\x1b\\\x1b\\",
+                    .{ img.img_id, img_cols, img_rows },
                 );
+
+                // Save current foreground color state, then set foreground to encode image ID
+                try unicode_placeholder.setForegroundForImageId(tty, img.img_id);
+
+                // Write placeholder characters for all cells in the image
+                // We need to position cursor for each row and write placeholders
+                for (0..img_rows) |img_row| {
+                    // Position cursor at the start of this image row
+                    const abs_row = row + @as(u16, @intCast(img_row));
+                    if (self.state.alt_screen) {
+                        try tty.print(ctlseqs.cup, .{ abs_row + 1, col + 1 });
+                    } else {
+                        // For non-alt-screen, we need relative positioning
+                        // This is complex, so for now just use cup-style positioning
+                        // by outputting newlines and carriage returns
+                        if (img_row > 0) {
+                            try tty.writeByte('\n');
+                            try tty.writeByte('\r');
+                            if (col > 0) {
+                                try tty.print(ctlseqs.cuf, .{col});
+                            }
+                        }
+                    }
+
+                    // Write placeholders for each column in this row
+                    for (0..img_cols) |img_col| {
+                        try unicode_placeholder.writePlaceholder(
+                            tty,
+                            @intCast(img_row),
+                            @intCast(img_col),
+                        );
+                    }
+                }
+
+                // Reset foreground color
+                try unicode_placeholder.resetForeground(tty);
+
+                // Mark cells covered by this image as skipped in screen_last
+                // so we don't re-render them in subsequent frames
+                for (0..img_rows) |img_row| {
+                    for (0..img_cols) |img_col| {
+                        const skip_idx = (@as(usize, @intCast(row + img_row)) * self.screen_last.width) +
+                            (col + @as(u16, @intCast(img_col)));
+                        if (skip_idx < self.screen_last.buf.len) {
+                            self.screen_last.buf[skip_idx].skip = true;
+                        }
+                    }
+                }
+
+                // Update cursor position tracking
+                cursor_pos.row = row + img_rows - 1;
+                cursor_pos.col = col + img_cols;
+                reposition = true;
+            } else {
+                // Standard kitty graphics placement
+                try tty.print(
+                    ctlseqs.kitty_graphics_preamble,
+                    .{img.img_id},
+                );
+                if (img.options.pixel_offset) |offset| {
+                    try tty.print(
+                        ",X={d},Y={d}",
+                        .{ offset.x, offset.y },
+                    );
+                }
+                if (img.options.clip_region) |clip| {
+                    if (clip.x) |x|
+                        try tty.print(",x={d}", .{x});
+                    if (clip.y) |y|
+                        try tty.print(",y={d}", .{y});
+                    if (clip.width) |width|
+                        try tty.print(",w={d}", .{width});
+                    if (clip.height) |height|
+                        try tty.print(",h={d}", .{height});
+                }
+                if (img.options.size) |size| {
+                    if (size.rows) |rows|
+                        try tty.print(",r={d}", .{rows});
+                    if (size.cols) |cols|
+                        try tty.print(",c={d}", .{cols});
+                }
+                if (img.options.z_index) |z| {
+                    try tty.print(",z={d}", .{z});
+                }
+                try tty.writeAll(ctlseqs.kitty_graphics_closing);
             }
-            if (img.options.clip_region) |clip| {
-                if (clip.x) |x|
-                    try tty.print(",x={d}", .{x});
-                if (clip.y) |y|
-                    try tty.print(",y={d}", .{y});
-                if (clip.width) |width|
-                    try tty.print(",w={d}", .{width});
-                if (clip.height) |height|
-                    try tty.print(",h={d}", .{height});
-            }
-            if (img.options.size) |size| {
-                if (size.rows) |rows|
-                    try tty.print(",r={d}", .{rows});
-                if (size.cols) |cols|
-                    try tty.print(",c={d}", .{cols});
-            }
-            if (img.options.z_index) |z| {
-                try tty.print(",z={d}", .{z});
-            }
-            try tty.writeAll(ctlseqs.kitty_graphics_closing);
         }
 
         // something is different, so let's loop through everything and
@@ -902,7 +986,7 @@ pub fn transmitLocalImagePath(
     medium: Image.TransmitMedium,
     format: Image.TransmitFormat,
 ) !Image {
-    if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    if (!self.caps.kitty_graphics and !self.caps.tmux) return error.NoGraphicsCapability;
 
     defer self.next_img_id += 1;
 
@@ -921,25 +1005,49 @@ pub fn transmitLocalImagePath(
         .shared_mem => 's',
     };
 
-    switch (format) {
-        .rgb => {
-            try tty.print(
-                "\x1b_Gf=24,s={d},v={d},i={d},t={c};{s}\x1b\\",
-                .{ width, height, id, medium_char, encoded },
-            );
-        },
-        .rgba => {
-            try tty.print(
-                "\x1b_Gf=32,s={d},v={d},i={d},t={c};{s}\x1b\\",
-                .{ width, height, id, medium_char, encoded },
-            );
-        },
-        .png => {
-            try tty.print(
-                "\x1b_Gf=100,i={d},t={c};{s}\x1b\\",
-                .{ id, medium_char, encoded },
-            );
-        },
+    if (self.caps.tmux) {
+        // Tmux requires passthrough wrapping and quiet mode (q=2)
+        switch (format) {
+            .rgb => {
+                try tty.print(
+                    "\x1bPtmux;\x1b\x1b_Gf=24,s={d},v={d},i={d},t={c},q=2;{s}\x1b\x1b\\\x1b\\",
+                    .{ width, height, id, medium_char, encoded },
+                );
+            },
+            .rgba => {
+                try tty.print(
+                    "\x1bPtmux;\x1b\x1b_Gf=32,s={d},v={d},i={d},t={c},q=2;{s}\x1b\x1b\\\x1b\\",
+                    .{ width, height, id, medium_char, encoded },
+                );
+            },
+            .png => {
+                try tty.print(
+                    "\x1bPtmux;\x1b\x1b_Gf=100,i={d},t={c},q=2;{s}\x1b\x1b\\\x1b\\",
+                    .{ id, medium_char, encoded },
+                );
+            },
+        }
+    } else {
+        switch (format) {
+            .rgb => {
+                try tty.print(
+                    "\x1b_Gf=24,s={d},v={d},i={d},t={c};{s}\x1b\\",
+                    .{ width, height, id, medium_char, encoded },
+                );
+            },
+            .rgba => {
+                try tty.print(
+                    "\x1b_Gf=32,s={d},v={d},i={d},t={c};{s}\x1b\\",
+                    .{ width, height, id, medium_char, encoded },
+                );
+            },
+            .png => {
+                try tty.print(
+                    "\x1b_Gf=100,i={d},t={c};{s}\x1b\\",
+                    .{ id, medium_char, encoded },
+                );
+            },
+        }
     }
 
     try tty.flush();
@@ -959,7 +1067,7 @@ pub fn transmitPreEncodedImage(
     height: u16,
     format: Image.TransmitFormat,
 ) !Image {
-    if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    if (!self.caps.kitty_graphics and !self.caps.tmux) return error.NoGraphicsCapability;
 
     defer self.next_img_id += 1;
     const id = self.next_img_id;
@@ -970,34 +1078,58 @@ pub fn transmitPreEncodedImage(
         .png => 100,
     };
 
-    if (bytes.len < 4096) {
-        try tty.print(
-            "\x1b_Gf={d},s={d},v={d},i={d};{s}\x1b\\",
-            .{
-                fmt,
-                width,
-                height,
-                id,
-                bytes,
-            },
-        );
-    } else {
-        var n: usize = 4096;
-
-        try tty.print(
-            "\x1b_Gf={d},s={d},v={d},i={d},m=1;{s}\x1b\\",
-            .{ fmt, width, height, id, bytes[0..n] },
-        );
-        while (n < bytes.len) : (n += 4096) {
-            const end: usize = @min(n + 4096, bytes.len);
-            const m: u2 = if (end == bytes.len) 0 else 1;
+    if (self.caps.tmux) {
+        // Tmux requires passthrough wrapping and quiet mode (q=2)
+        if (bytes.len < 4096) {
             try tty.print(
-                "\x1b_Gm={d};{s}\x1b\\",
+                "\x1bPtmux;\x1b\x1b_Gf={d},s={d},v={d},i={d},q=2;{s}\x1b\x1b\\\x1b\\",
+                .{ fmt, width, height, id, bytes },
+            );
+        } else {
+            var n: usize = 4096;
+            try tty.print(
+                "\x1bPtmux;\x1b\x1b_Gf={d},s={d},v={d},i={d},m=1,q=2;{s}\x1b\x1b\\\x1b\\",
+                .{ fmt, width, height, id, bytes[0..n] },
+            );
+            while (n < bytes.len) : (n += 4096) {
+                const end: usize = @min(n + 4096, bytes.len);
+                const m: u2 = if (end == bytes.len) 0 else 1;
+                try tty.print(
+                    "\x1bPtmux;\x1b\x1b_Gm={d},q=2;{s}\x1b\x1b\\\x1b\\",
+                    .{ m, bytes[n..end] },
+                );
+            }
+        }
+    } else {
+        if (bytes.len < 4096) {
+            try tty.print(
+                "\x1b_Gf={d},s={d},v={d},i={d};{s}\x1b\\",
                 .{
-                    m,
-                    bytes[n..end],
+                    fmt,
+                    width,
+                    height,
+                    id,
+                    bytes,
                 },
             );
+        } else {
+            var n: usize = 4096;
+
+            try tty.print(
+                "\x1b_Gf={d},s={d},v={d},i={d},m=1;{s}\x1b\\",
+                .{ fmt, width, height, id, bytes[0..n] },
+            );
+            while (n < bytes.len) : (n += 4096) {
+                const end: usize = @min(n + 4096, bytes.len);
+                const m: u2 = if (end == bytes.len) 0 else 1;
+                try tty.print(
+                    "\x1b_Gm={d};{s}\x1b\\",
+                    .{
+                        m,
+                        bytes[n..end],
+                    },
+                );
+            }
         }
     }
 
@@ -1016,7 +1148,7 @@ pub fn transmitImage(
     img: *const zigimg.Image,
     format: Image.TransmitFormat,
 ) !Image {
-    if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    if (!self.caps.kitty_graphics and !self.caps.tmux) return error.NoGraphicsCapability;
 
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
@@ -1051,7 +1183,7 @@ pub fn loadImage(
     tty: *IoWriter,
     src: Image.Source,
 ) !Image {
-    if (!self.caps.kitty_graphics) return error.NoGraphicsCapability;
+    if (!self.caps.kitty_graphics and !self.caps.tmux) return error.NoGraphicsCapability;
 
     var read_buffer: [1024 * 1024]u8 = undefined; // 1MB buffer
     var img = switch (src) {
@@ -1063,11 +1195,19 @@ pub fn loadImage(
 }
 
 /// deletes an image from the terminal's memory
-pub fn freeImage(_: Vaxis, tty: *IoWriter, id: u32) void {
-    tty.print("\x1b_Ga=d,d=I,i={d};\x1b\\", .{id}) catch |err| {
-        log.err("couldn't delete image {d}: {}", .{ id, err });
-        return;
-    };
+/// deletes an image from the terminal's memory
+pub fn freeImage(self: Vaxis, tty: *IoWriter, id: u32) void {
+    if (self.caps.tmux) {
+        tty.print(ctlseqs.tmux_kitty_graphics_delete, .{id}) catch |err| {
+            log.err("couldn't delete image {d}: {}", .{ id, err });
+            return;
+        };
+    } else {
+        tty.print("\x1b_Ga=d,d=I,i={d};\x1b\\", .{id}) catch |err| {
+            log.err("couldn't delete image {d}: {}", .{ id, err });
+            return;
+        };
+    }
     tty.flush() catch {};
 }
 
